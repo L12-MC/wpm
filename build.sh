@@ -2,7 +2,7 @@
 # Build script for Well.. Simple interpreter
 # Compiles for the current platform
 
-echo "Building WPM v1.0"
+echo "Building WPM v1.1"
 echo "=============================="
 echo ""
 

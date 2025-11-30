@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 
-const String VERSION = "1.0.0";
+const String VERSION = "1.1";
 
 // Well.. Simple Package Manager (wpm)
 // Standalone package manager for Well.. Simple
@@ -39,8 +39,8 @@ class PackageManager {
         name = url.split('/').last.replaceAll('.git', '');
       }
       
-      print("📦 Installing package: $name");
-      print("🔗 From: $url");
+      print("Installing package: $name");
+      print("From: $url");
       
       // Create packages directory if it doesn't exist
       final dir = Directory(packagesDir);
@@ -53,22 +53,22 @@ class PackageManager {
       
       // Remove existing package if it exists
       if (packageDir.existsSync()) {
-        print("🗑️  Removing existing version...");
+        print("Removing existing version...");
         packageDir.deleteSync(recursive: true);
       }
       
       // Clone the repository
-      print("⬇️  Cloning repository...");
+      print("Cloning repository...");
       var result = await Process.run('git', ['clone', url, packagePath]);
       
       if (result.exitCode != 0) {
-        print("❌ Error cloning repository:");
+        print("Error cloning repository:");
         print(result.stderr);
         return false;
       }
       
-      print("✅ Package installed successfully!");
-      print("📍 Location: $packagePath");
+      print("Package installed successfully!");
+      print("Location: $packagePath");
       
       // Save package info
       var packages = loadInstalledPackages();
@@ -82,7 +82,7 @@ class PackageManager {
       
       return true;
     } catch (e) {
-      print("❌ Error installing package: $e");
+      print("Error installing package: $e");
       return false;
     }
   }
@@ -91,14 +91,14 @@ class PackageManager {
     var packages = loadInstalledPackages();
     
     if (packages.isEmpty) {
-      print("📦 No packages installed.");
+      print("No packages installed.");
       print("");
       print("To install a package, run:");
       print("  wpm install <git-url> [package-name]");
       return;
     }
     
-    print("📦 Installed packages:");
+    print("Installed packages:");
     print("═" * 60);
     packages.forEach((name, info) {
       print("");
@@ -120,7 +120,7 @@ class PackageManager {
       var packages = loadInstalledPackages();
       
       if (!packages.containsKey(name)) {
-        print("❌ Package not found: $name");
+        print("Package not found: $name");
         return false;
       }
       
@@ -129,16 +129,16 @@ class PackageManager {
       
       if (packageDir.existsSync()) {
         packageDir.deleteSync(recursive: true);
-        print("🗑️  Removed package directory: $packagePath");
+        print("Removed package directory: $packagePath");
       }
       
       packages.remove(name);
       saveInstalledPackages(packages);
       
-      print("✅ Package removed: $name");
+      print("Package removed: $name");
       return true;
     } catch (e) {
-      print("❌ Error removing package: $e");
+      print("Error removing package: $e");
       return false;
     }
   }
@@ -147,24 +147,24 @@ class PackageManager {
     var packages = loadInstalledPackages();
     
     if (!packages.containsKey(name)) {
-      print("❌ Package not found: $name");
+      print("Package not found: $name");
       return;
     }
     
     String url = packages[name]['url'];
     String path = packages[name]['path'];
     
-    print("🔄 Updating package: $name");
+    print("Updating package: $name");
     
     // Try to pull latest changes
     var result = await Process.run('git', ['pull'], workingDirectory: path);
     
     if (result.exitCode == 0) {
-      print("✅ Package updated successfully!");
+      print("Package updated successfully!");
       packages[name]['updated'] = DateTime.now().toIso8601String();
       saveInstalledPackages(packages);
     } else {
-      print("❌ Error updating package:");
+      print("Error updating package:");
       print(result.stderr);
       print("");
       print("Trying full reinstall...");
@@ -182,11 +182,11 @@ class PackageManager {
     }).toList();
     
     if (matches.isEmpty) {
-      print("🔍 No packages found matching: $query");
+      print("No packages found matching: $query");
       return;
     }
     
-    print("🔍 Search results for '$query':");
+    print("Search results for '$query':");
     print("═" * 60);
     for (var entry in matches) {
       print("");
@@ -202,7 +202,7 @@ class PackageManager {
 void printHelp() {
   print("""
 ╔═══════════════════════════════════════════════════════════╗
-║  wpm - Well.. Simple Package Manager v$VERSION             ║
+║  wpm - Well.. Simple Package Manager v$VERSION                 ║
 ╚═══════════════════════════════════════════════════════════╝
 
 USAGE:
@@ -265,7 +265,7 @@ Future<void> main(List<String> args) async {
   switch (command) {
     case 'install':
       if (args.length < 2) {
-        print("❌ Error: URL required");
+        print("Error: URL required");
         print("Usage: wpm install <git-url> [package-name]");
         exit(1);
       }
@@ -283,7 +283,7 @@ Future<void> main(List<String> args) async {
     case 'rm':
     case 'uninstall':
       if (args.length < 2) {
-        print("❌ Error: Package name required");
+        print("Error: Package name required");
         print("Usage: wpm remove <package-name>");
         exit(1);
       }
@@ -294,7 +294,7 @@ Future<void> main(List<String> args) async {
     case 'update':
     case 'upgrade':
       if (args.length < 2) {
-        print("❌ Error: Package name required");
+        print("Error: Package name required");
         print("Usage: wpm update <package-name>");
         exit(1);
       }
@@ -305,7 +305,7 @@ Future<void> main(List<String> args) async {
     case 'search':
     case 'find':
       if (args.length < 2) {
-        print("❌ Error: Search query required");
+        print("Error: Search query required");
         print("Usage: wpm search <query>");
         exit(1);
       }
@@ -326,7 +326,7 @@ Future<void> main(List<String> args) async {
       break;
       
     default:
-      print("❌ Unknown command: $command");
+      print("Unknown command: $command");
       print("");
       printHelp();
       exit(1);

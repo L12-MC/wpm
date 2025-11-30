@@ -2,7 +2,7 @@
 REM Build script for Well.. Simple interpreter (Windows)
 REM Compiles for Windows platform
 
-echo Building wpm v1.0
+echo Building wpm v1.3
 echo ==============================
 echo.
 
