@@ -14,11 +14,11 @@ PLATFORM=$(uname -s)
 case "$PLATFORM" in
     Linux*)
         echo "Detected platform: Linux"
-        OUTPUT="build/wpm-linux"
+        OUTPUT="build/wpm"
         ;;
     Darwin*)
         echo "Detected platform: macOS"
-        OUTPUT="build/wpm-macos"
+        OUTPUT="build/wpm"
         ;;
     MINGW*|MSYS*|CYGWIN*)
         echo "Detected platform: Windows"
@@ -33,7 +33,7 @@ echo ""
 
 # Build for current platform
 echo "Building executable..."
-dart compile exe main.dart -o "$OUTPUT"
+dart compile exe wpm.dart -o "$OUTPUT"
 
 if [ $? -eq 0 ]; then
     echo ""
