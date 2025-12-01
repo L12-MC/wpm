@@ -1,206 +1,441 @@
-import 'dart:io';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
-const String VERSION = "1.1";
+import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
+import 'package:path/path.dart' as p;
+
+const String VERSION = "2.0.0";
 
 // Well.. Simple Package Manager (wpm)
-// Standalone package manager for Well.. Simple
+// Zip-based package manager with mapping.json registry and wsx runner
 
-class PackageManager {
+class Paths {
   static const String packagesDir = 'ws_packages';
-  static const String packagesFile = 'ws_packages.json';
-  
-  static Map<String, dynamic> loadInstalledPackages() {
-    try {
-      final file = File(packagesFile);
-      if (file.existsSync()) {
-        String content = file.readAsStringSync();
-        return jsonDecode(content);
-      }
-    } catch (e) {
-      // Return empty map if error
+  static const String metaFile = 'ws_packages.json';
+  static const String cachedMappingFile = 'mapping.json';
+}
+
+class Config {
+  final String mappingUrl;
+
+  Config(this.mappingUrl);
+
+  static Config load({String? overrideUrl}) {
+    // Priority: explicit override > env var > config file > error
+    final envUrl = Platform.environment['WPM_MAPPING_URL'];
+    final configFile = File('wpm_config.json');
+    String? fileUrl;
+    if (configFile.existsSync()) {
+      try {
+        final data = jsonDecode(configFile.readAsStringSync());
+        fileUrl = data['mappingUrl']?.toString();
+      } catch (_) {}
     }
+    final url = overrideUrl ?? envUrl ?? fileUrl;
+    if (url == null || url.isEmpty) {
+      throw Exception(
+          'No mapping URL configured. Set env WPM_MAPPING_URL or create wpm_config.json {"mappingUrl": "https://.../mapping.json"}');
+    }
+    return Config(url);
+  }
+}
+
+class Registry {
+  final Map<String, dynamic> data;
+
+  Registry(this.data);
+
+  static Future<Registry> refresh(Config cfg) async {
+    final dir = Directory(Paths.packagesDir);
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final file = File(p.join(Paths.packagesDir, Paths.cachedMappingFile));
+    stdout.writeln('Fetching mapping.json...');
+    final client = HttpClient();
+    try {
+      final uri = Uri.parse(cfg.mappingUrl);
+      final req = await client.getUrl(uri);
+      final resp = await req.close();
+      if (resp.statusCode != 200) {
+        throw Exception(
+            'Failed to download mapping.json (HTTP ${resp.statusCode})');
+      }
+      final bytes = await _readAllBytes(resp);
+      file.writeAsBytesSync(bytes);
+      stdout.writeln('mapping.json updated.');
+      return Registry(jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Registry loadCached() {
+    final file = File(p.join(Paths.packagesDir, Paths.cachedMappingFile));
+    if (!file.existsSync()) {
+      throw Exception('No cached mapping.json. Run "wpm refresh" first.');
+    }
+    return Registry(jsonDecode(file.readAsStringSync()));
+  }
+
+  Map<String, dynamic>? getPackage(String name) {
+    // Expected format: { "packages": { name: { url, version, ... } } }
+    if (data.containsKey('packages') && data['packages'] is Map) {
+      final pkg = (data['packages'] as Map)[name];
+      if (pkg is Map<String, dynamic>) return pkg;
+    }
+    // Also support flat structure: { name: { url, version } }
+    if (data[name] is Map<String, dynamic>) {
+      return data[name] as Map<String, dynamic>;
+    }
+    return null;
+  }
+
+  static Future<List<int>> _readAllBytes(HttpClientResponse resp) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in resp) {
+      builder.add(chunk);
+    }
+    return builder.takeBytes();
+  }
+}
+
+class MetaStore {
+  static Map<String, dynamic> load() {
+    try {
+      final f = File(Paths.metaFile);
+      if (f.existsSync()) return jsonDecode(f.readAsStringSync());
+    } catch (_) {}
     return {};
   }
-  
-  static void saveInstalledPackages(Map<String, dynamic> packages) {
+
+  static void save(Map<String, dynamic> meta) {
+    File(Paths.metaFile)
+        .writeAsStringSync(const JsonEncoder.withIndent('  ').convert(meta));
+  }
+}
+
+class ZipInstaller {
+  static Future<void> downloadTo(String url, File outFile) async {
+    final client = HttpClient();
     try {
-      final file = File(packagesFile);
-      file.writeAsStringSync(jsonEncode(packages));
-    } catch (e) {
-      print("Error saving package metadata: $e");
+      final uri = Uri.parse(url);
+      final req = await client.getUrl(uri);
+      final resp = await req.close();
+      if (resp.statusCode != 200) {
+        throw Exception('Download failed (HTTP ${resp.statusCode})');
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in resp) {
+        builder.add(chunk);
+      }
+      final bytes = builder.takeBytes();
+      outFile.writeAsBytesSync(bytes);
+    } finally {
+      client.close(force: true);
     }
   }
-  
-  static Future<bool> installPackage(String url, String? name) async {
-    try {
-      // Extract package name from URL if not provided
-      if (name == null || name.isEmpty) {
-        name = url.split('/').last.replaceAll('.git', '');
-      }
-      
-      print("Installing package: $name");
-      print("From: $url");
-      
-      // Create packages directory if it doesn't exist
-      final dir = Directory(packagesDir);
-      if (!dir.existsSync()) {
-        dir.createSync();
-      }
-      
-      final packagePath = '$packagesDir/$name';
-      final packageDir = Directory(packagePath);
-      
-      // Remove existing package if it exists
-      if (packageDir.existsSync()) {
-        print("Removing existing version...");
-        packageDir.deleteSync(recursive: true);
-      }
-      
-      // Clone the repository
-      print("Cloning repository...");
-      var result = await Process.run('git', ['clone', url, packagePath]);
-      
-      if (result.exitCode != 0) {
-        print("Error cloning repository:");
-        print(result.stderr);
-        return false;
-      }
-      
-      print("Package installed successfully!");
-      print("Location: $packagePath");
-      
-      // Save package info
-      var packages = loadInstalledPackages();
-      packages[name] = {
-        'url': url,
-        'path': packagePath,
-        'installed': DateTime.now().toIso8601String(),
-        'version': '1.0.0' // Could parse from package if available
-      };
-      saveInstalledPackages(packages);
-      
-      return true;
-    } catch (e) {
-      print("Error installing package: $e");
+
+  static void extractZip(File zipFile, String destDir) {
+    final bytes = zipFile.readAsBytesSync();
+    final archive = ZipDecoder().decodeBytes(bytes);
+    extractArchiveToDisk(archive, destDir);
+  }
+}
+
+class Packages {
+  static Future<bool> installByName(String pkgName,
+      {Registry? registry}) async {
+    final reg = registry ?? Registry.loadCached();
+    final info = reg.getPackage(pkgName);
+    if (info == null) {
+      stderr.writeln('Package not found in mapping.json: $pkgName');
       return false;
     }
+    final url = info['url']?.toString();
+    if (url == null || url.isEmpty) {
+      stderr.writeln('Package "$pkgName" has no url in mapping.json');
+      return false;
+    }
+
+    final baseDir = Directory(Paths.packagesDir);
+    if (!baseDir.existsSync()) baseDir.createSync(recursive: true);
+    final dest = p.join(Paths.packagesDir, pkgName);
+    final destDir = Directory(dest);
+    if (destDir.existsSync()) {
+      stdout.writeln('Removing existing "$pkgName"...');
+      destDir.deleteSync(recursive: true);
+    }
+    destDir.createSync(recursive: true);
+
+    stdout.writeln('Downloading $pkgName from $url');
+    final tmpZip = File(p.join(dest, 'package.zip'));
+    await ZipInstaller.downloadTo(url, tmpZip);
+
+    stdout.writeln('Extracting...');
+    ZipInstaller.extractZip(tmpZip, dest);
+    if (tmpZip.existsSync()) tmpZip.deleteSync();
+
+    // Normalize: if archive contains a top-level folder (package_name/...), move contents
+    _flattenIfSingleTopLevelFolder(destDir);
+
+    // Read package.json for metadata
+    final pkgJsonFile = File(p.join(dest, 'package.json'));
+    Map<String, dynamic> pkgJson = {};
+    if (pkgJsonFile.existsSync()) {
+      try {
+        pkgJson = jsonDecode(pkgJsonFile.readAsStringSync());
+      } catch (_) {}
+    }
+
+    // Persist metadata
+    final meta = MetaStore.load();
+    meta[pkgName] = {
+      'name': pkgName,
+      'path': dest,
+      'url': url,
+      'version': (pkgJson['version'] ?? info['version'] ?? '').toString(),
+      'description':
+          (pkgJson['description'] ?? info['description'] ?? '').toString(),
+      'author': (pkgJson['author'] ?? info['author'] ?? '').toString(),
+      'license': (pkgJson['license'] ?? info['license'] ?? '').toString(),
+      'installed': DateTime.now().toIso8601String(),
+      'assignments': pkgJson['assignments'] ?? []
+    };
+    MetaStore.save(meta);
+
+    stdout.writeln('Installed "$pkgName" at $dest');
+    return true;
   }
-  
-  static void listPackages() {
-    var packages = loadInstalledPackages();
-    
-    if (packages.isEmpty) {
-      print("No packages installed.");
-      print("");
-      print("To install a package, run:");
-      print("  wpm install <git-url> [package-name]");
+
+  static Future<void> updateByName(String pkgName) async {
+    final reg = Registry.loadCached();
+    final info = reg.getPackage(pkgName);
+    if (info == null) {
+      stderr.writeln('Package not found in mapping.json: $pkgName');
       return;
     }
-    
-    print("Installed packages:");
-    print("═" * 60);
-    packages.forEach((name, info) {
-      print("");
-      print("Package: $name");
-      print("  URL:       ${info['url']}");
-      print("  Path:      ${info['path']}");
-      print("  Installed: ${info['installed']}");
-      if (info.containsKey('version')) {
-        print("  Version:   ${info['version']}");
+    final meta = MetaStore.load();
+    final local = meta[pkgName];
+    String? localVersion;
+    if (local is Map) localVersion = local['version']?.toString();
+    final remoteVersion = info['version']?.toString();
+    if (localVersion != null &&
+        remoteVersion != null &&
+        localVersion == remoteVersion) {
+      stdout.writeln('"$pkgName" is up to date ($localVersion).');
+      return;
+    }
+    stdout.writeln(
+        'Updating "$pkgName" (${localVersion ?? 'unknown'} -> ${remoteVersion ?? 'unknown'})');
+    await installByName(pkgName, registry: reg);
+  }
+
+  static void listInstalled() {
+    final meta = MetaStore.load();
+    if (meta.isEmpty) {
+      stdout.writeln('No packages installed.');
+      stdout.writeln('Use: wpm install <package_name>');
+      return;
+    }
+    stdout.writeln('Installed packages:');
+    stdout.writeln(''.padRight(60, '═'));
+    meta.forEach((name, value) {
+      if (value is Map) {
+        final path = value['path'] ?? '';
+        final version = value['version'] ?? '';
+        final desc = value['description'] ?? '';
+        stdout.writeln('\n$name');
+        stdout.writeln('  Version: $version');
+        stdout.writeln('  Path:    $path');
+        if (desc.toString().isNotEmpty) stdout.writeln('  Desc:    $desc');
       }
     });
-    print("");
-    print("═" * 60);
-    print("Total packages: ${packages.length}");
+    stdout.writeln('\n'.padRight(60, '═'));
+    stdout.writeln('Total: ${meta.length}');
   }
-  
-  static bool removePackage(String name) {
-    try {
-      var packages = loadInstalledPackages();
-      
-      if (!packages.containsKey(name)) {
-        print("Package not found: $name");
-        return false;
-      }
-      
-      final packagePath = packages[name]['path'];
-      final packageDir = Directory(packagePath);
-      
-      if (packageDir.existsSync()) {
-        packageDir.deleteSync(recursive: true);
-        print("Removed package directory: $packagePath");
-      }
-      
-      packages.remove(name);
-      saveInstalledPackages(packages);
-      
-      print("Package removed: $name");
-      return true;
-    } catch (e) {
-      print("Error removing package: $e");
+
+  static bool uninstall(String pkgName) {
+    final meta = MetaStore.load();
+    if (!meta.containsKey(pkgName)) {
+      stderr.writeln('Package not installed: $pkgName');
       return false;
     }
+    final path = (meta[pkgName]['path'] ?? '').toString();
+    if (path.isNotEmpty) {
+      final dir = Directory(path);
+      if (dir.existsSync()) {
+        dir.deleteSync(recursive: true);
+        stdout.writeln('Deleted $path');
+      }
+    }
+    meta.remove(pkgName);
+    MetaStore.save(meta);
+    stdout.writeln('Uninstalled "$pkgName"');
+    return true;
   }
-  
-  static Future<void> updatePackage(String name) async {
-    var packages = loadInstalledPackages();
-    
-    if (!packages.containsKey(name)) {
-      print("Package not found: $name");
+
+  static Future<void> getFromManifest() async {
+    final file = File('wpackage.json');
+    if (!file.existsSync()) {
+      stderr.writeln('wpackage.json not found in current directory.');
+      exit(1);
+    }
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(file.readAsStringSync());
+    } catch (e) {
+      stderr.writeln('Invalid wpackage.json: $e');
+      exit(1);
+    }
+    final pkgs =
+        (data['packages'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    if (pkgs.isEmpty) {
+      stdout.writeln('No packages listed in wpackage.json.');
       return;
     }
-    
-    String url = packages[name]['url'];
-    String path = packages[name]['path'];
-    
-    print("Updating package: $name");
-    
-    // Try to pull latest changes
-    var result = await Process.run('git', ['pull'], workingDirectory: path);
-    
-    if (result.exitCode == 0) {
-      print("Package updated successfully!");
-      packages[name]['updated'] = DateTime.now().toIso8601String();
-      saveInstalledPackages(packages);
-    } else {
-      print("Error updating package:");
-      print(result.stderr);
-      print("");
-      print("Trying full reinstall...");
-      await installPackage(url, name);
+    // Ensure mapping is available
+    try {
+      Registry.loadCached();
+    } catch (_) {
+      final cfg = Config.load();
+      await Registry.refresh(cfg);
+    }
+    for (final name in pkgs) {
+      final meta = MetaStore.load();
+      if (meta.containsKey(name)) {
+        await updateByName(name);
+      } else {
+        await installByName(name);
+      }
     }
   }
-  
-  static void searchPackages(String query) {
-    var packages = loadInstalledPackages();
-    
-    var matches = packages.entries.where((entry) {
-      String name = entry.key.toLowerCase();
-      String url = entry.value['url'].toString().toLowerCase();
-      return name.contains(query.toLowerCase()) || url.contains(query.toLowerCase());
-    }).toList();
-    
-    if (matches.isEmpty) {
-      print("No packages found matching: $query");
-      return;
+
+  static void runModule(String moduleName) async {
+    final meta = MetaStore.load();
+    if (meta.isEmpty) {
+      stderr.writeln('No packages installed.');
+      exit(1);
     }
-    
-    print("Search results for '$query':");
-    print("═" * 60);
-    for (var entry in matches) {
-      print("");
-      print("Package: ${entry.key}");
-      print("  URL: ${entry.value['url']}");
+
+    // Search all packages for a module mapping
+    for (final entry in meta.entries) {
+      final pkgName = entry.key;
+      final pkgPath = (entry.value['path'] ?? '').toString();
+      final assignFiles = _collectAssignmentFiles(pkgPath, entry.value);
+      for (final assign in assignFiles) {
+        final file = File(assign);
+        if (!file.existsSync()) continue;
+        try {
+          final data = jsonDecode(file.readAsStringSync());
+          final modules = data['modules'] as Map?;
+          if (modules != null && modules.containsKey(moduleName)) {
+            final rel = modules[moduleName].toString();
+            final srcPath = p.join(pkgPath, 'src', rel);
+            final resolved = _resolveModuleEntry(srcPath);
+            if (resolved != null) {
+              await _execWsx(resolved);
+              return;
+            } else {
+              stderr.writeln(
+                  'Module "$moduleName" found in "$pkgName" but entry not runnable.');
+              exit(1);
+            }
+          }
+        } catch (_) {
+          // ignore malformed assignment.json
+        }
+      }
     }
-    print("");
-    print("═" * 60);
-    print("Found ${matches.length} package(s)");
+
+    stderr.writeln('Module not found: $moduleName');
+    exit(1);
+  }
+
+  static List<String> _collectAssignmentFiles(String pkgPath, Map value) {
+    final files = <String>[];
+    // from package.json assignments list
+    final pkgJson = File(p.join(pkgPath, 'package.json'));
+    if (pkgJson.existsSync()) {
+      try {
+        final j = jsonDecode(pkgJson.readAsStringSync());
+        if (j['assignments'] is List) {
+          for (final a in (j['assignments'] as List)) {
+            files.add(p.join(pkgPath, a.toString()));
+          }
+        }
+      } catch (_) {}
+    }
+    // include default assignment.json at root if present
+    final defaultAssign = File(p.join(pkgPath, 'assignment.json'));
+    if (defaultAssign.existsSync()) files.add(defaultAssign.path);
+    return files;
+  }
+
+  static String? _resolveModuleEntry(String srcPath) {
+    final fi = File(srcPath);
+    final di = Directory(srcPath);
+    if (fi.existsSync()) {
+      // If sibling __main__.wsx exists in same dir as file, prefer that
+      final mainCandidate = File(p.join(p.dirname(fi.path), '__main__.wsx'));
+      if (mainCandidate.existsSync()) return mainCandidate.path;
+      return fi.path;
+    }
+    if (di.existsSync()) {
+      final mainFile = File(p.join(di.path, '__main__.wsx'));
+      if (mainFile.existsSync()) return mainFile.path;
+    }
+    return null;
+  }
+
+  static Future<void> _execWsx(String filePath) async {
+    final interpreter = _detectInterpreter();
+    if (interpreter == null) {
+      stderr.writeln(
+          'No WSlang interpreter found. Set env WS_INTERPRETER to the executable, or add "ws" to PATH.');
+      exit(1);
+    }
+    stdout.writeln('Running: $filePath');
+    final proc = await Process.start(interpreter, [filePath],
+        mode: ProcessStartMode.inheritStdio);
+    final exitCode = await proc.exitCode;
+    exit(exitCode);
+  }
+
+  static String? _detectInterpreter() {
+    final env = Platform.environment['WS_INTERPRETER'];
+    if (env != null && env.isNotEmpty && File(env).existsSync()) return env;
+    // Try common names
+    const candidates = ['ws', 'wslang', 'ws.exe', 'wslang.exe'];
+    for (final c in candidates) {
+      try {
+        final result = Process.runSync(c, ['--version']);
+        if (result.exitCode == 0 ||
+            result.stdout.toString().isNotEmpty ||
+            result.stderr.toString().isNotEmpty) {
+          return c;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  static void _flattenIfSingleTopLevelFolder(Directory destDir) {
+    final entries = destDir.listSync();
+    if (entries.length == 1 && entries.first is Directory) {
+      final inner = entries.first as Directory;
+      // Move contents up one level
+      for (final entity in inner.listSync(recursive: false)) {
+        final newPath = p.join(destDir.path, p.basename(entity.path));
+        entity.renameSync(newPath);
+      }
+      inner.deleteSync(recursive: true);
+    }
   }
 }
 
 void printHelp() {
-  print("""
+  print('''
 ╔═══════════════════════════════════════════════════════════╗
 ║  wpm - Well.. Simple Package Manager v$VERSION                 ║
 ╚═══════════════════════════════════════════════════════════╝
@@ -209,49 +444,26 @@ USAGE:
   wpm <command> [arguments]
 
 COMMANDS:
-  install <url> [name]  Install a package from Git repository
-  list                  List all installed packages
-  remove <name>         Remove an installed package
-  update <name>         Update a package to latest version
-  search <query>        Search installed packages
-  help                  Show this help message
-  version               Show version information
+  refresh                       Download latest mapping.json from registry
+  install <package>             Install package by name (from mapping.json)
+  update <package>              Update installed package if newer available
+  uninstall <package>           Remove an installed package
+  list                          List installed packages
+  get                           Install/Update packages from wpackage.json
+  run <module_name>             Run a module from installed packages
+  help                          Show this help message
+  version                       Show version information
 
-EXAMPLES:
-  # Install a package
-  wpm install https://github.com/user/math-lib.git mathlib
-
-  # Install with auto-detected name
-  wpm install https://github.com/user/string-utils.git
-
-  # List installed packages
-  wpm list
-
-  # Update a package
-  wpm update mathlib
-
-  # Remove a package
-  wpm remove mathlib
-
-  # Search packages
-  wpm search math
-
-PACKAGE STRUCTURE:
-  Packages are stored in: ws_packages/
-  Metadata file: ws_packages.json
-
-REQUIREMENTS:
-  - Git must be installed and available in PATH
-  - Internet connection for installing packages
-
-For more information, visit:
-  docs/package-manager.md
-""");
+NOTES:
+  - Configure mapping URL via env WPM_MAPPING_URL or wpm_config.json
+  - Packages are zip files extracted under ws_packages/<name>
+  - assignment.json maps module names to entries under src/
+  - run searches for __main__.wsx near the mapped module or runs the mapped .wsx
+''');
 }
 
 void printVersion() {
-  print("wpm (Well.. Simple Package Manager) v$VERSION");
-  print("Package manager for Well.. Simple programming language");
+  print('wpm (Well.. Simple Package Manager) v$VERSION');
 }
 
 Future<void> main(List<String> args) async {
@@ -259,76 +471,74 @@ Future<void> main(List<String> args) async {
     printHelp();
     exit(0);
   }
-  
-  String command = args[0].toLowerCase();
-  
-  switch (command) {
-    case 'install':
-      if (args.length < 2) {
-        print("Error: URL required");
-        print("Usage: wpm install <git-url> [package-name]");
+  final cmd = args.first.toLowerCase();
+  try {
+    switch (cmd) {
+      case 'refresh':
+        final cfg = Config.load();
+        await Registry.refresh(cfg);
+        break;
+      case 'install':
+        if (args.length < 2) {
+          stderr.writeln('Usage: wpm install <package_name>');
+          exit(1);
+        }
+        Registry reg;
+        try {
+          reg = Registry.loadCached();
+        } catch (_) {
+          final cfg = Config.load();
+          reg = await Registry.refresh(cfg);
+        }
+        final ok = await Packages.installByName(args[1], registry: reg);
+        exit(ok ? 0 : 1);
+      case 'update':
+        if (args.length < 2) {
+          stderr.writeln('Usage: wpm update <package_name>');
+          exit(1);
+        }
+        await Packages.updateByName(args[1]);
+        break;
+      case 'uninstall':
+      case 'remove':
+      case 'rm':
+        if (args.length < 2) {
+          stderr.writeln('Usage: wpm uninstall <package_name>');
+          exit(1);
+        }
+        final ok = Packages.uninstall(args[1]);
+        exit(ok ? 0 : 1);
+      case 'list':
+      case 'ls':
+        Packages.listInstalled();
+        break;
+      case 'get':
+        await Packages.getFromManifest();
+        break;
+      case 'run':
+        if (args.length < 2) {
+          stderr.writeln('Usage: wpm run <module_name>');
+          exit(1);
+        }
+        Packages.runModule(args[1]);
+        break;
+      case 'help':
+      case '-h':
+      case '--help':
+        printHelp();
+        break;
+      case 'version':
+      case '-v':
+      case '--version':
+        printVersion();
+        break;
+      default:
+        stderr.writeln('Unknown command: $cmd');
+        printHelp();
         exit(1);
-      }
-      String url = args[1];
-      String? name = args.length > 2 ? args[2] : null;
-      bool success = await PackageManager.installPackage(url, name);
-      exit(success ? 0 : 1);
-      
-    case 'list':
-    case 'ls':
-      PackageManager.listPackages();
-      break;
-      
-    case 'remove':
-    case 'rm':
-    case 'uninstall':
-      if (args.length < 2) {
-        print("Error: Package name required");
-        print("Usage: wpm remove <package-name>");
-        exit(1);
-      }
-      String name = args[1];
-      bool success = PackageManager.removePackage(name);
-      exit(success ? 0 : 1);
-      
-    case 'update':
-    case 'upgrade':
-      if (args.length < 2) {
-        print("Error: Package name required");
-        print("Usage: wpm update <package-name>");
-        exit(1);
-      }
-      String name = args[1];
-      await PackageManager.updatePackage(name);
-      break;
-      
-    case 'search':
-    case 'find':
-      if (args.length < 2) {
-        print("Error: Search query required");
-        print("Usage: wpm search <query>");
-        exit(1);
-      }
-      String query = args[1];
-      PackageManager.searchPackages(query);
-      break;
-      
-    case 'help':
-    case '--help':
-    case '-h':
-      printHelp();
-      break;
-      
-    case 'version':
-    case '--version':
-    case '-v':
-      printVersion();
-      break;
-      
-    default:
-      print("Unknown command: $command");
-      print("");
-      printHelp();
-      exit(1);
+    }
+  } on Exception catch (e) {
+    stderr.writeln('Error: ${e.toString()}');
+    exit(1);
   }
 }

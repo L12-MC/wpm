@@ -1,26 +1,28 @@
 # WPM - Well.. Simple Package Manager
 
-A lightweight, Git-based package manager for the Well.. Simple programming language.
+Zip-based package manager and runner for Well.. Simple (WSlang) packages.
 
 ## Overview
 
-WPM (Well.. Simple Package Manager) allows you to install, manage, and update packages from Git repositories. It provides a simple command-line interface for managing dependencies in your Well.. Simple projects.
+WPM allows you to install, update, and remove packages described by a remote `mapping.json`. Packages are distributed as `.zip` files with a standard layout and can expose runnable modules via `assignment.json`.
 
 ## Features
 
-- 📦 **Install packages** from any Git repository
+- 🔗 **Registry-driven installs** via `mapping.json`
+- 📦 **Install packages** from remote `.zip` URLs
 - 📋 **List installed packages** with detailed information
 - 🗑️ **Remove packages** cleanly
 - 🔄 **Update packages** to their latest versions
-- 🔍 **Search** through installed packages
+- 🧾 **Project manifest** support via `wpackage.json` (`wpm get`)
+- ▶️ **Run modules** (`wpm run <module_name>`) via `assignment.json`
 - 💾 **Automatic metadata tracking** for all packages
 - 🎯 **Simple, intuitive commands**
 
 ## Requirements
 
 - **Dart SDK** (for building and running)
-- **Git** (must be installed and available in PATH)
 - **Internet connection** (for installing packages)
+- WSlang interpreter in PATH (command `ws` or set `WS_INTERPRETER` env var)
 
 ## Installation
 
@@ -45,21 +47,31 @@ The executable will be created in the `build/` directory.
 
 ## Usage
 
+### Configure Registry
+
+Provide the URL to `mapping.json` using either an env var or a config file:
+
+1) Environment variable (recommended):
+```powershell
+$env:WPM_MAPPING_URL = "https://example.com/path/to/mapping.json"
+```
+
+2) Local file `wpm_config.json` in the working directory:
+```json
+{ "mappingUrl": "https://example.com/path/to/mapping.json" }
+```
+
+Then pull the latest registry map:
+```powershell
+build\wpm.exe refresh
+```
+
 ### Basic Commands
 
 #### Install a Package
-Install a package from a Git repository:
-```bash
-wpm install <git-url> [package-name]
-```
-
-**Examples:**
-```bash
-# Install with custom name
-wpm install https://github.com/user/math-lib.git mathlib
-
-# Install with auto-detected name
-wpm install https://github.com/user/string-utils.git
+Install by name as defined in `mapping.json`:
+```powershell
+wpm install <package_name>
 ```
 
 #### List Installed Packages
@@ -70,13 +82,10 @@ wpm list
 wpm ls
 ```
 
-#### Remove a Package
+#### Uninstall a Package
 Uninstall a package:
-```bash
-wpm remove <package-name>
-# or
-wpm rm <package-name>
-wpm uninstall <package-name>
+```powershell
+wpm uninstall <package_name>
 ```
 
 **Example:**
@@ -86,10 +95,8 @@ wpm remove mathlib
 
 #### Update a Package
 Update a package to its latest version:
-```bash
-wpm update <package-name>
-# or
-wpm upgrade <package-name>
+```powershell
+wpm update <package_name>
 ```
 
 **Example:**
@@ -97,18 +104,25 @@ wpm upgrade <package-name>
 wpm update mathlib
 ```
 
-#### Search Packages
-Search through installed packages:
-```bash
-wpm search <query>
-# or
-wpm find <query>
+#### Sync From Project Manifest
+Install/update packages listed in `wpackage.json` (in current directory):
+```powershell
+wpm get
 ```
 
-**Example:**
-```bash
-wpm search math
+`wpackage.json` structure:
+```json
+{
+	"packages": ["package_name", "package_name2"]
+}
 ```
+
+#### Run a Module
+Run a module exposed by any installed package via `assignment.json`:
+```powershell
+wpm run <module_name>
+```
+This locates the module in installed packages, preferring a `__main__.wsx` next to the mapped entry, otherwise it runs the mapped `.wsx` file.
 
 #### Help & Version
 ```bash
@@ -121,42 +135,81 @@ wpm version     # Show version information
 ### Storage Location
 - **Packages directory:** `ws_packages/`
 - **Metadata file:** `ws_packages.json`
+- **Cached registry:** `ws_packages/mapping.json`
 
 All packages are cloned into the `ws_packages/` directory, with each package in its own subdirectory.
 
-### Metadata
-WPM automatically tracks metadata for each installed package:
-- Package name
-- Git URL
-- Installation path
-- Installation date
-- Version information
+### Package Format
+
+Each `.zip` should contain:
+```
+package_name/
+	package.json
+	assignment.json
+	src/
+		*.wsx
+```
+
+`package.json` example:
+```json
+{
+	"name": "package_name",
+	"version": "1.0.0",
+	"url": "http://example.com/package_name.zip",
+	"description": "A brief description of the package.",
+	"author": "Author Name",
+	"license": "MIT",
+	"assignments": ["assignment.json"]
+}
+```
+
+`assignment.json` example:
+```json
+{
+	"modules": {
+		"module_name": "test1.wsx",
+		"module_name2": "test2.wsx"
+	}
+}
+```
+
+### Metadata Tracked
+For each installed package, WPM tracks:
+- Name, path, URL
+- Version, description, author, license (from `package.json`/registry)
+- Install timestamp
 
 ## How It Works
 
-1. **Installation:** WPM clones the Git repository into `ws_packages/<package-name>`
-2. **Tracking:** Package metadata is stored in `ws_packages.json`
-3. **Updates:** WPM pulls the latest changes from the Git repository
-4. **Removal:** Package directory and metadata are cleaned up
+1. **Refresh:** Download `mapping.json` from the configured URL
+2. **Install:** Download `.zip` and extract into `ws_packages/<package_name>`
+3. **Track:** Read `package.json` and store metadata in `ws_packages.json`
+4. **Update:** Compare remote vs local version; reinstall if newer
+5. **Remove:** Delete the package directory and metadata entry
 
 ## Examples
 
 ### Complete Workflow
-```bash
-# Install a math library
-wpm install https://github.com/wslang/math-utils.git math
+```powershell
+# Configure registry (one-time)
+$env:WPM_MAPPING_URL = "https://example.com/registry/mapping.json"
+wpm refresh
 
-# List all packages
+# Install packages
+wpm install mathlib
+wpm install graphics
+
+# List packages
 wpm list
 
-# Update the package
-wpm update math
+# Update a package
+wpm update mathlib
 
-# Search for it
-wpm search math
+# Run a module
+wpm run drawHouse
 
 # Remove when done
-wpm remove math
+wpm uninstall graphics
 ```
 
 ### Installing Multiple Packages
@@ -171,11 +224,15 @@ wpm list
 
 | Command | Aliases | Arguments | Description |
 |---------|---------|-----------|-------------|
-| `install` | - | `<url> [name]` | Install a package from Git |
-| `list` | `ls` | - | List all installed packages |
-| `remove` | `rm`, `uninstall` | `<name>` | Remove a package |
-| `update` | `upgrade` | `<name>` | Update a package |
-| `search` | `find` | `<query>` | Search installed packages |
+| Command | Aliases | Arguments | Description |
+|---------|---------|-----------|-------------|
+| `refresh` | - | - | Download latest `mapping.json` |
+| `install` | - | `<package>` | Install package by name |
+| `update` | `upgrade` | `<package>` | Update a package |
+| `uninstall` | `remove`, `rm` | `<package>` | Remove a package |
+| `list` | `ls` | - | List installed packages |
+| `get` | - | - | Sync from `wpackage.json` |
+| `run` | - | `<module_name>` | Run a module |
 | `help` | `-h`, `--help` | - | Show help message |
 | `version` | `-v`, `--version` | - | Show version |
 
@@ -193,10 +250,17 @@ wpm/
 ```
 
 ### Building
-The build scripts use `dart compile exe` to create a standalone native executable.
+The build scripts restore dependencies and compile a native executable:
+```
+# Windows
+build.bat
+
+# Linux/macOS
+./build.sh
+```
 
 ### Version
-Current version: **1.0.0**
+Current version: **2.0.0**
 
 ## Error Handling
 
@@ -212,21 +276,16 @@ WPM provides clear error messages with emoji indicators:
 
 ## Troubleshooting
 
-### Git Not Found
-If you see "git command not found":
-- Ensure Git is installed: `git --version`
-- Add Git to your system PATH
-
-### Clone Failed
-If package installation fails:
-- Check your internet connection
-- Verify the Git URL is correct and accessible
-- Ensure you have permissions to access the repository
+### Registry URL Missing
+Set `WPM_MAPPING_URL` or create `wpm_config.json` with `mappingUrl`.
 
 ### Package Directory Issues
 If packages aren't appearing:
 - Check that `ws_packages/` directory exists
 - Verify `ws_packages.json` is not corrupted
+
+### WSlang Interpreter Missing
+Set `WS_INTERPRETER` to your interpreter path, or ensure `ws` is available in PATH.
 
 ## License
 

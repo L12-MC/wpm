@@ -2,7 +2,7 @@
 REM Build script for Well.. Simple interpreter (Windows)
 REM Compiles for Windows platform
 
-echo Building wpm v1.3
+echo Building wpm v2.0.0
 echo ==============================
 echo.
 
@@ -13,6 +13,14 @@ echo Detected platform: Windows
 echo.
 
 REM Build for Windows
+echo Restoring dependencies...
+dart pub get
+if %errorlevel% neq 0 (
+    echo.
+    echo X Failed to restore dependencies
+    exit /b 1
+)
+
 echo Building executable...
 dart compile exe wpm.dart -o build\wpm.exe
 

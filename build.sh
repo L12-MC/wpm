@@ -2,7 +2,7 @@
 # Build script for Well.. Simple interpreter
 # Compiles for the current platform
 
-echo "Building WPM v1.1"
+echo "Building WPM v2.0.0"
 echo "=============================="
 echo ""
 
@@ -30,6 +30,15 @@ case "$PLATFORM" in
         ;;
 esac
 echo ""
+
+# Restore dependencies
+echo "Restoring dependencies..."
+dart pub get
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "✗ Failed to restore dependencies"
+    exit 1
+fi
 
 # Build for current platform
 echo "Building executable..."
