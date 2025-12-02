@@ -8,15 +8,15 @@ WPM allows you to install, update, and remove packages described by a remote `ma
 
 ## Features
 
-- 🔗 **Registry-driven installs** via `mapping.json`
-- 📦 **Install packages** from remote `.zip` URLs
-- 📋 **List installed packages** with detailed information
-- 🗑️ **Remove packages** cleanly
-- 🔄 **Update packages** to their latest versions
-- 🧾 **Project manifest** support via `wpackage.json` (`wpm get`)
-- ▶️ **Run modules** (`wpm run <module_name>`) via `assignment.json`
-- 💾 **Automatic metadata tracking** for all packages
-- 🎯 **Simple, intuitive commands**
+-  **Registry-driven installs** via `mapping.json`
+-  **Install packages** from remote `.zip` URLs
+-  **List installed packages** with detailed information
+-  **Remove packages** cleanly
+-  **Update packages** to their latest versions
+-  **Project manifest** support via `wpackage.json` (`wpm get`)
+-  **Run modules** (`wpm run <module_name>`) via `assignment.json`
+-  **Automatic metadata tracking** for all packages
+-  **Simple, intuitive commands**
 
 ## Requirements
 
