@@ -23,7 +23,9 @@ class Config {
   Config(this.mappingUrl);
 
   static Config load({String? overrideUrl}) {
-    // Priority: explicit override > env var > config file > error
+    // Priority: explicit override > env var > config file > default
+    const defaultUrl =
+        'https://raw.githubusercontent.com/L12-MC/wpmmap/refs/heads/main/mapping.json';
     final envUrl = Platform.environment['WPM_MAPPING_URL'];
     final configFile = File('wpm_config.json');
     String? fileUrl;
@@ -33,11 +35,7 @@ class Config {
         fileUrl = data['mappingUrl']?.toString();
       } catch (_) {}
     }
-    final url = overrideUrl ?? envUrl ?? fileUrl;
-    if (url == null || url.isEmpty) {
-      throw Exception(
-          'No mapping URL configured. Set env WPM_MAPPING_URL or create wpm_config.json {"mappingUrl": "https://.../mapping.json"}');
-    }
+    final url = overrideUrl ?? envUrl ?? fileUrl ?? defaultUrl;
     return Config(url);
   }
 }
