@@ -23,6 +23,7 @@ if %errorlevel% neq 0 (
 
 echo Building executable...
 dart compile exe wpm.dart -o build\wpm.exe
+dart compile exe wpm.dart --target-os linux -o build\wpm
 
 if %errorlevel% equ 0 (
     echo.
